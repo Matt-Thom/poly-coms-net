@@ -3,7 +3,6 @@
 [![Node.js](https://img.shields.io/badge/Node.js-≥22.13.0-brightgreen.svg)](https://nodejs.org/)
 [![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-≥1.1.28-blue.svg)](https://github.com/google/antigravity)
 [![Zero Dependencies](https://img.shields.io/badge/Runtime_Dependencies-0-success.svg)](#zero-runtime-dependency-architecture)
-[![License](https://img.shields.io/badge/License-MIT-purple.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-293_Passing-brightgreen.svg)](#testing)
 
 **Antigravity Coms-Net** is the official Antigravity CLI (`agy`) integration for the **coms-net multi-agent mesh network**. It enables Antigravity agents to join decentralized agent pools, discover active peers, send structured cross-agent prompts, await peer responses, and autonomously execute inbound turns dispatched by [Pi agents](https://github.com/mariozechner/pi-coding-agent) or peer Antigravity agents.
@@ -33,7 +32,6 @@
 - [Security & Anti-Looping Discipline](#security--anti-looping-discipline)
 - [Testing](#testing)
 - [Documentation](#documentation)
-- [License](#license)
 
 ---
 
@@ -581,9 +579,4 @@ For in-depth architectural analysis, protocol specifications, and developer guid
 - [**Protocol Specification**](docs/protocol.md) — Comprehensive REST API contracts, SSE event specifications, Crockford Base32 ULID formatting, and anti-looping rules.
 - [**Usage Guide & Tutorials**](docs/usage.md) — Step-by-step tutorials covering multi-agent setups, JSON Schema enforcement, multi-turn dialogues, and error recovery.
 
----
-
-## License
-
-MIT © Antigravity Team
 
