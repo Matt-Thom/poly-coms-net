@@ -10,20 +10,93 @@
 
 import * as os from "node:os";
 import * as fs from "node:fs";
+import * as crypto from "node:crypto";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 import { ComsNetClient } from "./protocol/client.ts";
 import { discoverHubSync } from "./protocol/discovery.ts";
 import { BridgeDaemon } from "./bridge/daemon.ts";
 import {
-  AgyCliTurnExecutor,
-  MockTurnExecutor,
+  createTurnExecutor,
+  SUPPORTED_HARNESSES,
+  type SupportedHarness,
   type ITurnExecutor,
 } from "./bridge/turn-executor.ts";
+import { NEON_PALETTE } from "./bridge/lifecycle.ts";
 import type { AgentCard, DiscoveryResult } from "./protocol/types.ts";
 import { renderComsNetBox } from "./protocol/render.ts";
 
+export { SUPPORTED_HARNESSES, type SupportedHarness };
+
+export interface HarnessMetadataDefaults {
+  namePrefix: string;
+  purpose: string;
+  model: string;
+  provider: string;
+  color?: string;
+  runtime?: string;
+}
+
+export const HARNESS_DEFAULTS: Record<SupportedHarness, HarnessMetadataDefaults> = {
+  antigravity: {
+    namePrefix: "antigravity",
+    purpose: "Antigravity CLI bridge agent",
+    model: "gemini-2.5-pro",
+    provider: "google",
+    runtime: "antigravity",
+  },
+  claude: {
+    namePrefix: "claude",
+    purpose: "Claude Code CLI bridge agent",
+    model: "claude-sonnet-4-6",
+    provider: "anthropic",
+    runtime: "claude",
+  },
+  codex: {
+    namePrefix: "codex",
+    purpose: "OpenAI Codex CLI bridge agent",
+    model: "gpt-5.3-codex",
+    provider: "openai",
+    runtime: "codex",
+  },
+  aider: {
+    namePrefix: "aider",
+    purpose: "Aider AI pair programming agent",
+    model: "claude-3-7-sonnet",
+    provider: "openai",
+    runtime: "aider",
+  },
+  grok: {
+    namePrefix: "grok",
+    purpose: "Grok CLI bridge agent",
+    model: "grok-4.6",
+    provider: "xai",
+    runtime: "grok",
+  },
+  hermes: {
+    namePrefix: "hermes",
+    purpose: "Nous Research Hermes Agent autonomous worker",
+    model: "hermes-3-llama-3.1-70b",
+    provider: "nousresearch",
+    color: "#C792EA",
+    runtime: "hermes",
+  },
+  mock: {
+    namePrefix: "mock",
+    purpose: "Hermetic mock bridge agent",
+    model: "mock-model",
+    provider: "mock",
+    runtime: "mock",
+  },
+};
+
+export function getDeterministicColor(seed: string): string {
+  const hash = crypto.createHash("sha256").update(seed).digest();
+  return NEON_PALETTE[hash[0] % NEON_PALETTE.length];
+}
+
 export interface BridgeCliArgs {
+  harness: SupportedHarness;
   project?: string;
   serverUrl?: string;
   authToken?: string;
@@ -43,6 +116,7 @@ export interface BridgeCliArgs {
 }
 
 const PARSE_OPTIONS = {
+  harness: { type: "string" as const, short: "H" },
   project: { type: "string" as const, short: "p" },
   "server-url": { type: "string" as const, short: "u" },
   "auth-token": { type: "string" as const, short: "t" },
@@ -79,14 +153,15 @@ USAGE:
   $ coms-net-bridge [options]
 
 OPTIONS:
+  -H, --harness <name>          Turn execution harness: antigravity, claude, codex, aider, grok, hermes, mock (default: antigravity)
   -p, --project <project>       Target project namespace (default: "default" or $PI_COMS_NET_PROJECT)
   -u, --server-url <url>        Coms-net hub URL (default: discovered via server.json or $PI_COMS_NET_SERVER_URL)
   -t, --auth-token <token>      Hub auth token (default: discovered via server.secret.json or $PI_COMS_NET_AUTH_TOKEN)
-  -n, --name <name>             Agent name to register (default: antigravity-<hostname>)
-      --purpose <text>          Agent purpose description (default: "Antigravity CLI bridge agent")
+  -n, --name <name>             Agent name to register (default: <harness>-<hostname>)
+      --purpose <text>          Agent purpose description (defaults to harness-specific description)
   -m, --model <model>           LLM model override for turn execution (e.g. "gemini-3.7-flash-high")
       --cwd <path>              Working directory for agent execution (default: current directory)
-      --mock                    Run in hermetic mock mode using MockTurnExecutor
+      --mock                    Run in hermetic mock mode using MockTurnExecutor (equivalent to -H mock)
       --mock-response <text>    Canned response string for mock mode
       --max-turns <n>           Maximum concurrent turn executions (default: 1)
       --heartbeat-ms <n>        Heartbeat interval in milliseconds (default: 10000)
@@ -107,6 +182,12 @@ EXAMPLES:
   # Start bridge using auto-discovery on default project
   $ coms-net-bridge
 
+  # Start bridge worker for Claude Code
+  $ coms-net-bridge -H claude
+
+  # Start bridge worker for Hermes Agent with custom model
+  $ coms-net-bridge -H hermes -m hermes-3-llama-3.1-70b
+
   # Display connected peer pool box and exit
   $ coms-net-bridge --peers
 
@@ -121,6 +202,8 @@ EXAMPLES:
 `.trim();
 }
 
+export const formatHelpText = getHelpText;
+
 export function parseCliArgs(args: string[] = process.argv.slice(2)): BridgeCliArgs {
   const { values } = parseArgs({
     args,
@@ -128,6 +211,21 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): BridgeCliA
     strict: true,
     allowPositionals: false,
   });
+
+  let harness: SupportedHarness = "antigravity";
+  if (values.mock) {
+    harness = "mock";
+  }
+  if (values.harness !== undefined) {
+    const rawHarness = values.harness;
+    const normalized = rawHarness.toLowerCase().trim();
+    if (!SUPPORTED_HARNESSES.includes(normalized as SupportedHarness)) {
+      throw new Error(
+        `Invalid --harness value '${rawHarness}': must be one of ${SUPPORTED_HARNESSES.map((h) => `'${h}'`).join(", ")}`
+      );
+    }
+    harness = normalized as SupportedHarness;
+  }
 
   let maxTurns: number | undefined;
   if (values["max-turns"] !== undefined) {
@@ -152,13 +250,14 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): BridgeCliA
   }
 
   return {
+    harness,
     project: values.project,
     serverUrl: values["server-url"],
     authToken: values["auth-token"],
     name: values.name,
     purpose: values.purpose,
     model: values.model,
-    mock: values.mock ?? false,
+    mock: Boolean(values.mock || harness === "mock"),
     mockResponse: values["mock-response"],
     cwd: values.cwd,
     maxTurns,
@@ -201,31 +300,39 @@ export async function runBridgeDaemon(args: BridgeCliArgs): Promise<BridgeDaemon
     process.exit(1);
   }
 
-  // 3. Resolve turn executor
-  let turnExecutor: ITurnExecutor;
-  if (args.mock) {
-    const defaultResponse = args.mockResponse || "Mock response from Antigravity Bridge";
-    turnExecutor = new MockTurnExecutor({ defaultResponse });
-    console.log(`[bridge] Turn executor: MockTurnExecutor (canned response configured)`);
-  } else {
-    turnExecutor = new AgyCliTurnExecutor({
-      model: args.model,
-      cwd: args.cwd || process.cwd(),
-    });
-    console.log(`[bridge] Turn executor: AgyCliTurnExecutor (model: ${args.model || "default"})`);
-  }
-
-  // 4. Default agent name
-  const defaultName = `antigravity-${os.hostname().toLowerCase().replace(/[^a-z0-9_-]/g, "")}`;
+  // 3. Resolve harness and metadata defaults
+  const harness = args.harness;
+  const defaults = HARNESS_DEFAULTS[harness];
+  const hostname = os.hostname().toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  const defaultName = `${defaults.namePrefix}-${hostname}`;
   const agentName = args.name || defaultName;
+  const purpose = args.purpose || defaults.purpose;
+  const model = args.model || defaults.model;
+  const provider = defaults.provider;
+  const color = defaults.color || getDeterministicColor(agentName);
+
+  // 4. Resolve turn executor
+  let timeoutMs: number | undefined;
+  const turnExecutor = createTurnExecutor({
+    harness,
+    model,
+    provider,
+    cwd: args.cwd || process.cwd(),
+    timeoutMs,
+    mockResponse: args.mockResponse,
+  });
+  console.log(`[bridge] Turn executor: ${turnExecutor.constructor.name} [harness=${harness}] (model: ${model})`);
 
   // 5. Instantiate BridgeDaemon
   const daemon = new BridgeDaemon({
     client,
     turnExecutor,
     name: agentName,
-    purpose: args.purpose || "Antigravity CLI bridge agent",
-    model: args.model,
+    purpose,
+    model,
+    provider,
+    color,
+    runtime: defaults.runtime || harness,
     cwd: args.cwd || process.cwd(),
     explicit: args.explicit,
     maxConcurrentTurns: args.maxTurns,

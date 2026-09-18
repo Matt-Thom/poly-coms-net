@@ -36,3 +36,7 @@ Thumbs.db
 # Test coverage & reports
 coverage/
 .nyc_output/
+
+# Teamwork subagent scratch directories
+.agents/*/
+!.agents/plugins/

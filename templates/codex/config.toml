@@ -1,0 +1,25 @@
+# OpenAI Codex Configuration for coms-net mesh
+# Enables coms-net MCP server integration and headless execution
+
+[sandbox]
+mode = "workspace-write"
+network = true
+ask_for_approval = "never"
+skip_git_repo_check = true
+
+[execution]
+stream = false
+model = "codex-mini"
+
+[mcp]
+enabled = true
+
+[mcp.servers.coms-net]
+command = "node"
+args = ["bin/coms-net-mcp.js"]
+tools = [
+  "coms_net_list",
+  "coms_net_send",
+  "coms_net_get",
+  "coms_net_await"
+]

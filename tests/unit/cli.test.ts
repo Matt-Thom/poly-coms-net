@@ -11,7 +11,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { parseCliArgs, getHelpText, getVersion } from "../../src/cli.ts";
+import {
+  parseCliArgs,
+  runBridgeDaemon,
+  getHelpText,
+  formatHelpText,
+  getVersion,
+  SUPPORTED_HARNESSES,
+  HARNESS_DEFAULTS,
+  type SupportedHarness,
+} from "../../src/cli.ts";
 import { MockHub } from "../mocks/mock-hub.ts";
 
 const execFileAsync = promisify(execFile);
@@ -19,14 +28,83 @@ const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 
 describe("CLI Tooling & Distribution Tests", () => {
   describe("Argument Parser (parseCliArgs)", () => {
-    it("should parse default arguments correctly", () => {
+    it("should parse default arguments correctly and default harness to antigravity", () => {
       const args = parseCliArgs([]);
+      assert.strictEqual(args.harness, "antigravity");
       assert.strictEqual(args.mock, false);
       assert.strictEqual(args.help, false);
       assert.strictEqual(args.version, false);
       assert.strictEqual(args.project, undefined);
       assert.strictEqual(args.serverUrl, undefined);
       assert.strictEqual(args.name, undefined);
+    });
+
+    it("should parse --harness for all supported harnesses", () => {
+      for (const harness of SUPPORTED_HARNESSES) {
+        const args = parseCliArgs(["--harness", harness]);
+        assert.strictEqual(args.harness, harness);
+        if (harness === "mock") {
+          assert.strictEqual(args.mock, true);
+        }
+      }
+    });
+
+    it("should parse -H short flag for all supported harnesses", () => {
+      for (const harness of SUPPORTED_HARNESSES) {
+        const args = parseCliArgs(["-H", harness]);
+        assert.strictEqual(args.harness, harness);
+      }
+    });
+
+    it("should normalize case and trim whitespace for --harness and -H", () => {
+      assert.strictEqual(parseCliArgs(["--harness", "  Claude "]).harness, "claude");
+      assert.strictEqual(parseCliArgs(["-H", "HERMES"]).harness, "hermes");
+      assert.strictEqual(parseCliArgs(["-H", "CoDeX"]).harness, "codex");
+      assert.strictEqual(parseCliArgs(["--harness", "AIDER"]).harness, "aider");
+      assert.strictEqual(parseCliArgs(["-H", "GrOk"]).harness, "grok");
+    });
+
+    it("should set harness to 'mock' when --mock is passed without --harness", () => {
+      const args = parseCliArgs(["--mock"]);
+      assert.strictEqual(args.harness, "mock");
+      assert.strictEqual(args.mock, true);
+    });
+
+    it("should allow explicit --harness to take precedence over --mock flag", () => {
+      const args = parseCliArgs(["--mock", "--harness", "claude"]);
+      assert.strictEqual(args.harness, "claude");
+
+      const argsShort = parseCliArgs(["--mock", "-H", "hermes"]);
+      assert.strictEqual(argsShort.harness, "hermes");
+    });
+
+    it("should reject invalid --harness values with informative error listing allowed options", () => {
+      assert.throws(
+        () => parseCliArgs(["--harness", "unknown_framework"]),
+        (err: Error) => {
+          assert.match(
+            err.message,
+            /Invalid --harness value 'unknown_framework': must be one of/
+          );
+          for (const h of SUPPORTED_HARNESSES) {
+            assert.ok(
+              err.message.includes(`'${h}'`),
+              `Error message should mention '${h}'`
+            );
+          }
+          return true;
+        }
+      );
+
+      assert.throws(
+        () => parseCliArgs(["-H", "bogus"]),
+        /Invalid --harness value 'bogus': must be one of/
+      );
+
+      assert.throws(
+        () => parseCliArgs(["--harness", ""]),
+        /Invalid --harness value '': must be one of/
+      );
     });
 
     it("should parse short flags (-p, -u, -t, -n, -m, -h, -v)", () => {
@@ -103,10 +181,27 @@ describe("CLI Tooling & Distribution Tests", () => {
     it("should produce non-empty help text containing all flags and examples", () => {
       const help = getHelpText();
       assert.ok(help.includes("coms-net-bridge"));
+      assert.ok(help.includes("--harness"));
+      assert.ok(help.includes("-H"));
       assert.ok(help.includes("--project"));
       assert.ok(help.includes("--server-url"));
       assert.ok(help.includes("--mock"));
       assert.ok(help.includes("EXAMPLES:"));
+    });
+
+    it("should document -H, --harness and allowed harnesses in help text", () => {
+      const help = getHelpText();
+      assert.ok(help.includes("-H, --harness <name>"));
+      assert.ok(help.includes("antigravity"));
+      assert.ok(help.includes("claude"));
+      assert.ok(help.includes("codex"));
+      assert.ok(help.includes("aider"));
+      assert.ok(help.includes("grok"));
+      assert.ok(help.includes("hermes"));
+      assert.ok(help.includes("mock"));
+      assert.ok(help.includes("bridge worker for Claude Code"));
+      assert.ok(help.includes("bridge worker for Hermes Agent"));
+      assert.strictEqual(formatHelpText(), help);
     });
 
     it("should produce valid semantic version string matching package.json", () => {
@@ -114,6 +209,51 @@ describe("CLI Tooling & Distribution Tests", () => {
       assert.match(version, /^\d+\.\d+\.\d+/);
       const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf-8"));
       assert.strictEqual(version, pkg.version);
+    });
+  });
+
+  describe("Harness Metadata Defaults (HARNESS_DEFAULTS)", () => {
+    it("should contain valid configurations for all 7 supported harnesses", () => {
+      assert.strictEqual(SUPPORTED_HARNESSES.length, 7);
+      for (const harness of SUPPORTED_HARNESSES) {
+        const defaults = HARNESS_DEFAULTS[harness];
+        assert.ok(defaults, `Defaults missing for ${harness}`);
+        assert.strictEqual(defaults.namePrefix, harness);
+        assert.strictEqual(defaults.runtime, harness);
+        assert.ok(defaults.purpose.length > 0);
+        assert.ok(defaults.model.length > 0);
+        assert.ok(defaults.provider.length > 0);
+      }
+    });
+
+    it("should specify signature Hermes agent metadata defaults", () => {
+      const hermes = HARNESS_DEFAULTS.hermes;
+      assert.strictEqual(hermes.namePrefix, "hermes");
+      assert.strictEqual(hermes.purpose, "Nous Research Hermes Agent autonomous worker");
+      assert.strictEqual(hermes.model, "hermes-3-llama-3.1-70b");
+      assert.strictEqual(hermes.provider, "nousresearch");
+      assert.strictEqual(hermes.color, "#C792EA");
+      assert.strictEqual(hermes.runtime, "hermes");
+    });
+
+    it("should specify correct providers and models for all other harnesses", () => {
+      assert.strictEqual(HARNESS_DEFAULTS.antigravity.provider, "google");
+      assert.strictEqual(HARNESS_DEFAULTS.antigravity.model, "gemini-2.5-pro");
+
+      assert.strictEqual(HARNESS_DEFAULTS.claude.provider, "anthropic");
+      assert.strictEqual(HARNESS_DEFAULTS.claude.model, "claude-sonnet-4-6");
+
+      assert.strictEqual(HARNESS_DEFAULTS.codex.provider, "openai");
+      assert.strictEqual(HARNESS_DEFAULTS.codex.model, "gpt-5.3-codex");
+
+      assert.strictEqual(HARNESS_DEFAULTS.aider.provider, "openai");
+      assert.strictEqual(HARNESS_DEFAULTS.aider.model, "claude-3-7-sonnet");
+
+      assert.strictEqual(HARNESS_DEFAULTS.grok.provider, "xai");
+      assert.strictEqual(HARNESS_DEFAULTS.grok.model, "grok-4.6");
+
+      assert.strictEqual(HARNESS_DEFAULTS.mock.provider, "mock");
+      assert.strictEqual(HARNESS_DEFAULTS.mock.model, "mock-model");
     });
   });
 
@@ -217,6 +357,138 @@ describe("CLI Tooling & Distribution Tests", () => {
 
       // Verify agent was removed from hub registry
       assert.strictEqual(project.agents.has(foundSessionId), false, "Agent must unregister on exit");
+    });
+
+    it("should boot bridge daemon via CLI with -H mock and shut down cleanly on SIGINT", async () => {
+      const bridgeScript = path.join(REPO_ROOT, "bin", "coms-net-bridge.js");
+      const child = spawn(bridgeScript, [
+        "-H", "mock",
+        "--server-url", hub.baseUrl,
+        "--auth-token", hub.token,
+        "--project", "cli-harness-test",
+        "--name", "cli-harness-worker",
+        "--mock-response", "Hello from -H mock",
+      ]);
+
+      let output = "";
+      child.stdout.on("data", (d) => { output += d.toString(); });
+      child.stderr.on("data", (d) => { output += d.toString(); });
+
+      // Wait until registered and SSE connected
+      const started = await new Promise<boolean>((resolve) => {
+        const checkInterval = setInterval(() => {
+          if (output.includes("Agent registered: cli-harness-worker") && output.includes("SSE event stream connected")) {
+            clearInterval(checkInterval);
+            resolve(true);
+          }
+        }, 50);
+
+        setTimeout(() => {
+          clearInterval(checkInterval);
+          resolve(false);
+        }, 5000);
+      });
+
+      assert.ok(started, `Daemon failed to start in time with -H mock. Output:\n${output}`);
+
+      // Verify presence in MockHub registry
+      const project = hub.getProject("cli-harness-test");
+      let foundSessionId = "";
+      for (const [id, agent] of project.agents.entries()) {
+        if (agent.name === "cli-harness-worker") {
+          foundSessionId = id;
+          break;
+        }
+      }
+      assert.ok(foundSessionId, "Agent must be registered in hub via -H mock");
+
+      // Dispatch SIGINT
+      child.kill("SIGINT");
+
+      const exitCode = await new Promise<number>((resolve) => {
+        child.on("exit", (code) => resolve(code ?? 0));
+      });
+
+      assert.strictEqual(exitCode, 0, "Process must exit cleanly with code 0");
+
+      // Verify agent was removed from hub registry
+      assert.strictEqual(project.agents.has(foundSessionId), false, "Agent must unregister on exit");
+    });
+  });
+
+  describe("Bridge Daemon Runtime Registration & Executor Propagation (runBridgeDaemon)", () => {
+    let hub: MockHub;
+
+    before(async () => {
+      hub = new MockHub();
+      await hub.start();
+    });
+
+    after(async () => {
+      await hub.stop();
+    });
+
+    it("should register agent identity runtime matching selected harness (especially -H hermes)", async () => {
+      for (const harness of SUPPORTED_HARNESSES) {
+        const args = parseCliArgs([
+          "-H", harness,
+          "--server-url", hub.baseUrl,
+          "--auth-token", hub.token,
+          "--project", `runtime-test-${harness}`,
+        ]);
+        const daemon = await runBridgeDaemon(args);
+        try {
+          const id = daemon.lifecycle.getIdentity();
+          assert.strictEqual(id.runtime, harness, `Registered runtime must match '${harness}'`);
+          assert.strictEqual(id.model, HARNESS_DEFAULTS[harness].model);
+          assert.strictEqual(id.provider, HARNESS_DEFAULTS[harness].provider);
+          if (harness === "hermes") {
+            assert.strictEqual(id.runtime, "hermes");
+            assert.strictEqual(id.model, "hermes-3-llama-3.1-70b");
+            assert.strictEqual(id.provider, "nousresearch");
+            assert.strictEqual(id.color, "#C792EA");
+          }
+        } finally {
+          await daemon.stop();
+        }
+      }
+    });
+
+    it("should propagate resolved default model and provider to createTurnExecutor", async () => {
+      const args = parseCliArgs([
+        "-H", "hermes",
+        "--server-url", hub.baseUrl,
+        "--auth-token", hub.token,
+        "--project", "turn-executor-defaults-test",
+      ]);
+      const daemon = await runBridgeDaemon(args);
+      try {
+        const executor = daemon.turnExecutor;
+        assert.strictEqual(Reflect.get(executor, "model"), "hermes-3-llama-3.1-70b");
+        assert.strictEqual(Reflect.get(executor, "provider"), "nousresearch");
+      } finally {
+        await daemon.stop();
+      }
+    });
+
+    it("should propagate explicit CLI --model override to both lifecycle and turnExecutor", async () => {
+      const args = parseCliArgs([
+        "-H", "hermes",
+        "-m", "custom-hermes-test-model",
+        "--server-url", hub.baseUrl,
+        "--auth-token", hub.token,
+        "--project", "turn-executor-model-override-test",
+      ]);
+      const daemon = await runBridgeDaemon(args);
+      try {
+        const id = daemon.lifecycle.getIdentity();
+        const executor = daemon.turnExecutor;
+        assert.strictEqual(id.model, "custom-hermes-test-model");
+        assert.strictEqual(Reflect.get(executor, "model"), "custom-hermes-test-model");
+        assert.strictEqual(Reflect.get(executor, "provider"), "nousresearch");
+      } finally {
+        await daemon.stop();
+      }
     });
   });
 

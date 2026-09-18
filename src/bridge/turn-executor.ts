@@ -42,6 +42,69 @@ export function formatInboundPrompt(
   );
 }
 
+// ━━ Turn Response Normalizer ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+/**
+ * Normalizes any CLI turn output or structured response field into a clean string.
+ * Recursively extracts message content, text chunks, and stringifies complex payloads,
+ * guaranteeing the ITurnExecutor response: string contract is never violated.
+ */
+export function normalizeTurnResponse(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          const rec = item as Record<string, unknown>;
+          if (typeof rec.text === "string") return rec.text;
+          if (typeof rec.content === "string") return rec.content;
+          if (Array.isArray(rec.content)) return normalizeTurnResponse(rec.content);
+          return JSON.stringify(item);
+        }
+        return String(item ?? "");
+      })
+      .filter((s) => s.length > 0)
+      .join("\n");
+  }
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.text === "string") {
+      return obj.text;
+    }
+    if (typeof obj.content === "string") {
+      return obj.content;
+    }
+    if (Array.isArray(obj.content)) {
+      return normalizeTurnResponse(obj.content);
+    }
+    if (typeof obj.response === "string") {
+      return obj.response;
+    }
+    if (typeof obj.result === "string") {
+      return obj.result;
+    }
+    if (typeof obj.message === "string") {
+      return obj.message;
+    }
+    if (obj.message && typeof obj.message === "object") {
+      return normalizeTurnResponse(obj.message);
+    }
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+export const normalizeStringResponse = normalizeTurnResponse;
+
 // ━━ Schema Validation & JSON Extraction ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 export interface SchemaValidationResult {
@@ -57,11 +120,13 @@ export function validateResponseSchema(
   rawResponse: string,
   responseSchema?: Record<string, unknown> | null
 ): SchemaValidationResult {
+  const safeStr = typeof rawResponse === "string" ? rawResponse : normalizeTurnResponse(rawResponse);
+
   if (!responseSchema || typeof responseSchema !== "object") {
-    return { payload: rawResponse, error: null };
+    return { payload: safeStr, error: null };
   }
 
-  const trimmed = rawResponse.trim();
+  const trimmed = safeStr.trim();
 
   // 1. Attempt direct JSON parse
   try {
@@ -190,10 +255,25 @@ export class AgyCliTurnExecutor implements ITurnExecutor {
         };
       }
 
+      if (errorObj?.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+        return {
+          response: "",
+          error: "Subprocess output exceeded maximum buffer limit (20MB)",
+        };
+      }
+
       // Check if stdout contained structured error JSON despite non-zero exit
       if (errorObj?.stdout) {
         try {
-          return this.parseOutput(errorObj.stdout, errorObj.stderr || "");
+          const parsedResult = this.parseOutput(errorObj.stdout, errorObj.stderr || "");
+          if (!parsedResult.error) {
+            const fallbackMsg =
+              errorObj?.stderr?.trim() ||
+              errorObj?.message ||
+              `Subprocess failed with exit code ${errorObj?.code || 1}`;
+            parsedResult.error = redactToken(fallbackMsg);
+          }
+          return parsedResult;
         } catch {
           // Fall through to generic error
         }
@@ -212,7 +292,7 @@ export class AgyCliTurnExecutor implements ITurnExecutor {
     if (!trimmed) {
       return {
         response: "",
-        error: stderr.trim() || "Empty output from Antigravity CLI",
+        error: redactToken(stderr.trim() || "Empty output from Antigravity CLI"),
       };
     }
 
@@ -237,10 +317,22 @@ export class AgyCliTurnExecutor implements ITurnExecutor {
       };
     }
 
+    const response = normalizeTurnResponse(parsed.response ?? "");
+
     if (parsed.status && parsed.status !== "SUCCESS") {
       return {
-        response: parsed.response || "",
-        error: parsed.error || parsed.response || `Turn completed with status: ${parsed.status}`,
+        response,
+        error: redactToken(parsed.error || response || `Turn completed with status: ${parsed.status}`),
+        conversation_id: parsed.conversation_id,
+        duration_seconds: parsed.duration_seconds,
+        usage: parsed.usage,
+      };
+    }
+
+    if (parsed.error) {
+      return {
+        response,
+        error: redactToken(parsed.error),
         conversation_id: parsed.conversation_id,
         duration_seconds: parsed.duration_seconds,
         usage: parsed.usage,
@@ -248,7 +340,7 @@ export class AgyCliTurnExecutor implements ITurnExecutor {
     }
 
     return {
-      response: parsed.response || "",
+      response,
       conversation_id: parsed.conversation_id,
       duration_seconds: parsed.duration_seconds,
       usage: parsed.usage,
@@ -324,3 +416,7 @@ export class MockTurnExecutor implements ITurnExecutor {
     };
   }
 }
+
+// ━━ Poly-Harness Executors & Factory ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+export * from "./executors/index.ts";
+

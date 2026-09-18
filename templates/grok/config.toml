@@ -1,0 +1,20 @@
+# Grok CLI Configuration for coms-net mesh
+# Configures MCP server integration and non-interactive preferences
+
+[execution]
+permission_mode = "bypassPermissions"
+always_approve = true
+output_format = "json"
+
+[mcp]
+enabled = true
+
+[mcp.servers.coms-net]
+command = "node"
+args = ["bin/coms-net-mcp.js"]
+tools = [
+  "coms_net_list",
+  "coms_net_send",
+  "coms_net_get",
+  "coms_net_await"
+]

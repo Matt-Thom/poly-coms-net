@@ -1,0 +1,18 @@
+# Hermes Configuration Snippet (~/.hermes/config.yaml)
+# Add or merge under the `mcp_servers` dictionary:
+
+mcp_servers:
+  coms-net:
+    command: "node"
+    args:
+      - "bin/coms-net-mcp.js"
+    enabled: true
+    timeout: 300
+    connect_timeout: 60
+    supports_parallel_tool_calls: false
+    tools:
+      include:
+        - coms_net_list
+        - coms_net_send
+        - coms_net_get
+        - coms_net_await

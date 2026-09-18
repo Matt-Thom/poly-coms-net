@@ -1,0 +1,42 @@
+{
+  "mcpServers": {
+    "coms-net": {
+      "command": "node",
+      "args": [
+        "bin/coms-net-mcp.js"
+      ],
+      "env": {}
+    }
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__coms_net__coms_net_send",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[coms-net] Initiating outbound dispatch...'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[coms-net] Claude turn complete.'"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "mcp__coms_net__coms_net_list",
+      "mcp__coms_net__coms_net_send",
+      "mcp__coms_net__coms_net_get",
+      "mcp__coms_net__coms_net_await"
+    ]
+  }
+}

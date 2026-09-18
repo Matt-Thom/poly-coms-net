@@ -1,0 +1,8 @@
+# Aider Configuration for coms-net bridge worker
+# Headless turn execution settings for autonomous mesh operations
+
+yes-always: true
+no-auto-commits: true
+no-dirty-commits: true
+show-diffs: false
+stream: false

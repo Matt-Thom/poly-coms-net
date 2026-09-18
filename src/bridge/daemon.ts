@@ -48,6 +48,7 @@ export interface BridgeDaemonOptions {
   model?: string;
   provider?: string;
   color?: string;
+  runtime?: string;
   cwd?: string;
   explicit?: boolean;
   maxConcurrentTurns?: number;
@@ -99,6 +100,7 @@ export class BridgeDaemon extends EventEmitter {
       model: options.model,
       provider: options.provider,
       color: options.color,
+      runtime: options.runtime,
       cwd: options.cwd,
       explicit: options.explicit,
       heartbeatIntervalMs: options.heartbeatIntervalMs,

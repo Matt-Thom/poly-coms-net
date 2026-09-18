@@ -1,0 +1,12 @@
+{
+  "hooks": [
+    {
+      "event": "PreToolUse",
+      "command": "echo '[grok-hook] PreToolUse event'"
+    },
+    {
+      "event": "Stop",
+      "command": "echo '[grok-hook] Grok response complete'"
+    }
+  ]
+}

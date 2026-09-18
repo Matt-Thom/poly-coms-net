@@ -113,3 +113,133 @@ monitor *args:
 test:
     npm test
 
+# ━━ Poly-Harness Bridge Worker Recipes ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Run Antigravity Bridge Worker (default harness)
+bridge-antigravity *args:
+    @just bridge --harness antigravity "$@"
+
+# Run Claude Code Bridge Worker
+bridge-claude *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "dist" ]; then
+        echo "==> dist/ missing, running build..."
+        npm run build
+    fi
+    if [ -z "${PI_COMS_NET_SERVER_URL:-}" ]; then
+        if [ -f "$HOME/.pi/coms-net/projects/forge.env" ]; then
+            source "$HOME/.pi/coms-net/projects/forge.env"
+        elif [ -f "$HOME/.pi/coms-net/env.sh" ]; then
+            source "$HOME/.pi/coms-net/env.sh"
+        fi
+    fi
+    echo "==> Starting coms-net Claude Code bridge worker (project: ${PI_COMS_NET_PROJECT:-default})"
+    exec ./bin/coms-net-bridge.js --harness claude "$@"
+
+# Run OpenAI Codex Bridge Worker
+bridge-codex *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "dist" ]; then
+        echo "==> dist/ missing, running build..."
+        npm run build
+    fi
+    if [ -z "${PI_COMS_NET_SERVER_URL:-}" ]; then
+        if [ -f "$HOME/.pi/coms-net/projects/forge.env" ]; then
+            source "$HOME/.pi/coms-net/projects/forge.env"
+        elif [ -f "$HOME/.pi/coms-net/env.sh" ]; then
+            source "$HOME/.pi/coms-net/env.sh"
+        fi
+    fi
+    echo "==> Starting coms-net OpenAI Codex bridge worker (project: ${PI_COMS_NET_PROJECT:-default})"
+    exec ./bin/coms-net-bridge.js --harness codex "$@"
+
+# Run Aider Bridge Worker
+bridge-aider *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "dist" ]; then
+        echo "==> dist/ missing, running build..."
+        npm run build
+    fi
+    if [ -z "${PI_COMS_NET_SERVER_URL:-}" ]; then
+        if [ -f "$HOME/.pi/coms-net/projects/forge.env" ]; then
+            source "$HOME/.pi/coms-net/projects/forge.env"
+        elif [ -f "$HOME/.pi/coms-net/env.sh" ]; then
+            source "$HOME/.pi/coms-net/env.sh"
+        fi
+    fi
+    echo "==> Starting coms-net Aider bridge worker (project: ${PI_COMS_NET_PROJECT:-default})"
+    exec ./bin/coms-net-bridge.js --harness aider "$@"
+
+# Run Grok CLI Bridge Worker
+bridge-grok *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "dist" ]; then
+        echo "==> dist/ missing, running build..."
+        npm run build
+    fi
+    if [ -z "${PI_COMS_NET_SERVER_URL:-}" ]; then
+        if [ -f "$HOME/.pi/coms-net/projects/forge.env" ]; then
+            source "$HOME/.pi/coms-net/projects/forge.env"
+        elif [ -f "$HOME/.pi/coms-net/env.sh" ]; then
+            source "$HOME/.pi/coms-net/env.sh"
+        fi
+    fi
+    echo "==> Starting coms-net Grok CLI bridge worker (project: ${PI_COMS_NET_PROJECT:-default})"
+    exec ./bin/coms-net-bridge.js --harness grok "$@"
+
+# Run Hermes Agent Bridge Worker
+bridge-hermes *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "dist" ]; then
+        echo "==> dist/ missing, running build..."
+        npm run build
+    fi
+    if [ -z "${PI_COMS_NET_SERVER_URL:-}" ]; then
+        if [ -f "$HOME/.pi/coms-net/projects/forge.env" ]; then
+            source "$HOME/.pi/coms-net/projects/forge.env"
+        elif [ -f "$HOME/.pi/coms-net/env.sh" ]; then
+            source "$HOME/.pi/coms-net/env.sh"
+        fi
+    fi
+    echo "==> Starting coms-net Hermes Agent bridge worker (project: ${PI_COMS_NET_PROJECT:-default})"
+    exec ./bin/coms-net-bridge.js --harness hermes "$@"
+
+# Run Hermetic Mock Bridge Worker
+bridge-mock *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "dist" ]; then
+        echo "==> dist/ missing, running build..."
+        npm run build
+    fi
+    echo "==> Starting coms-net hermetic mock bridge worker"
+    exec ./bin/coms-net-bridge.js --harness mock "$@"
+
+# ━━ Interactive Mesh Client Recipes ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Launch Claude Code interactive session connected to coms-net MCP
+claude-mesh *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "dist" ]; then
+        echo "==> dist/ missing, running build..."
+        npm run build
+    fi
+    exec claude --mcp-config templates/claude/mcp_config.json "$@"
+
+# Launch Hermes Agent interactive session connected to coms-net
+hermes-mesh *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "dist" ]; then
+        echo "==> dist/ missing, running build..."
+        npm run build
+    fi
+    exec hermes "$@"
+
+
