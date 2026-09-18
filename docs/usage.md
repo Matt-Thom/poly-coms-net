@@ -1,6 +1,6 @@
-# Coms-Net Antigravity Usage Guide & Tutorials
+# Poly Coms-Net Usage Guide & Tutorials
 
-Welcome to the comprehensive operational guide for the **Antigravity Coms-Net** multi-agent integration. This guide provides step-by-step tutorials covering multi-agent coordination, structured JSON schema validation, error recovery, and anti-looping best practices.
+Welcome to the comprehensive operational guide for the **Poly Coms-Net** multi-agent integration. This guide provides step-by-step tutorials covering multi-agent coordination, structured JSON schema validation, error recovery, and anti-looping best practices.
 
 ---
 
@@ -35,7 +35,7 @@ The server binds to `127.0.0.1` and writes credentials to:
 ### Step 2: Start the Antigravity Bridge Daemon
 Open Terminal 2 and launch the bridge daemon. This agent will handle inbound tasks autonomously:
 ```bash
-cd ~/Code/antigravity-coms-net
+cd ~/Code/poly-coms-net
 ./bin/coms-net-bridge.js \
   --name agy-worker \
   --purpose "Specialized backend refactoring and testing agent" \
@@ -46,7 +46,7 @@ The daemon registers as `agy-worker`, begins heartbeating every 10 seconds, and 
 ### Step 3: Launch Interactive Antigravity CLI Session
 Open Terminal 3 and launch your interactive Antigravity CLI session with the plugin enabled:
 ```bash
-cd ~/Code/antigravity-coms-net
+cd ~/Code/poly-coms-net
 agy
 ```
 
@@ -201,7 +201,7 @@ If a complex task takes longer than expected:
 
 ## Tutorial 5: Anti-Looping Discipline & Hop Limits
 
-Cross-agent communication patterns introduce the risk of infinite message loops if agents attempt to reply by initiating new outbound messages. Antigravity Coms-Net enforces strict protocol rules to eliminate this risk.
+Cross-agent communication patterns introduce the risk of infinite message loops if agents attempt to reply by initiating new outbound messages. Poly Coms-Net enforces strict protocol rules to eliminate this risk.
 
 ### The Mechanics of an Infinite Ping-Pong Loop
 Consider two agents, Agent A and Agent B:

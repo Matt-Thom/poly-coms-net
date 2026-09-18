@@ -1,7 +1,7 @@
 /**
  * src/cli.ts
  *
- * Command line entrypoint for the Antigravity Coms-Net bridge daemon.
+ * Command line entrypoint for the Poly-Harness Coms-Net bridge daemon.
  *
  * Usage:
  *   $ coms-net-bridge [options]
@@ -21,6 +21,7 @@ import {
   type ITurnExecutor,
 } from "./bridge/turn-executor.ts";
 import type { AgentCard, DiscoveryResult } from "./protocol/types.ts";
+import { renderComsNetBox } from "./protocol/render.ts";
 
 export interface BridgeCliArgs {
   project?: string;
@@ -35,6 +36,8 @@ export interface BridgeCliArgs {
   maxTurns?: number;
   heartbeatMs?: number;
   explicit?: boolean;
+  peers: boolean;
+  status: boolean;
   help: boolean;
   version: boolean;
 }
@@ -52,6 +55,8 @@ const PARSE_OPTIONS = {
   "max-turns": { type: "string" as const },
   "heartbeat-ms": { type: "string" as const },
   explicit: { type: "boolean" as const, default: false },
+  peers: { type: "boolean" as const, short: "P", default: false },
+  status: { type: "boolean" as const, default: false },
   help: { type: "boolean" as const, short: "h", default: false },
   version: { type: "boolean" as const, short: "v", default: false },
 };
@@ -68,7 +73,7 @@ export function getVersion(): string {
 
 export function getHelpText(): string {
   return `
-coms-net-bridge — Antigravity CLI Bridge Daemon for Coms-Net Mesh
+coms-net-bridge — Poly-Harness Bridge Daemon for Coms-Net Mesh
 
 USAGE:
   $ coms-net-bridge [options]
@@ -86,6 +91,8 @@ OPTIONS:
       --max-turns <n>           Maximum concurrent turn executions (default: 1)
       --heartbeat-ms <n>        Heartbeat interval in milliseconds (default: 10000)
       --explicit                Mark agent as explicit (hidden from default roster)
+  -P, --peers                   Query active mesh peer roster box and exit
+      --status                  Display hub connectivity and peer roster box and exit
   -h, --help                    Show this help message and exit
   -v, --version                 Show version information and exit
 
@@ -99,6 +106,9 @@ ENVIRONMENT VARIABLES:
 EXAMPLES:
   # Start bridge using auto-discovery on default project
   $ coms-net-bridge
+
+  # Display connected peer pool box and exit
+  $ coms-net-bridge --peers
 
   # Join a custom project with custom name and model
   $ coms-net-bridge -p dev-sprint -n coder-1 -m gemini-3.7-flash-high
@@ -154,6 +164,8 @@ export function parseCliArgs(args: string[] = process.argv.slice(2)): BridgeCliA
     maxTurns,
     heartbeatMs,
     explicit: values.explicit ?? false,
+    peers: values.peers ?? false,
+    status: values.status ?? false,
     help: values.help ?? false,
     version: values.version ?? false,
   };
@@ -267,9 +279,54 @@ export async function runBridgeDaemon(args: BridgeCliArgs): Promise<BridgeDaemon
     console.log(`[bridge] Bridge daemon stopped.`);
   });
 
+  daemon.on("pool_updated", ({ agents, rendered }) => {
+    console.log(`\n[bridge] Active mesh pool (${agents.length} peer${agents.length === 1 ? "" : "s"}):\n${rendered}\n`);
+  });
+
   // 7. Start daemon
   await daemon.start();
   return daemon;
+}
+
+export async function showPeersBox(args: BridgeCliArgs): Promise<void> {
+  let discovery: DiscoveryResult;
+  try {
+    discovery = discoverHubSync({
+      project: args.project,
+      serverUrl: args.serverUrl,
+      authToken: args.authToken,
+    });
+  } catch (err: unknown) {
+    console.error(`[bridge] Discovery failed: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+
+  const client = new ComsNetClient({
+    baseUrl: discovery.config.baseUrl,
+    authToken: discovery.config.authToken,
+    project: discovery.config.project,
+  });
+
+  try {
+    const res = await client.listAgents({
+      include_explicit: args.explicit,
+    });
+    const useColor = Boolean(process.stdout?.isTTY && !process.env.NO_COLOR);
+    const box = renderComsNetBox({
+      agents: res.agents,
+      currentAgentName: args.name,
+      width: process.stdout?.columns,
+      useColor,
+      includeExplicit: args.explicit,
+    });
+    if (args.status) {
+      console.log(`Hub: ${discovery.config.baseUrl} [project: ${discovery.config.project}]`);
+    }
+    console.log(box);
+  } catch (err: unknown) {
+    console.error(`[bridge] Failed to query peer roster: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
@@ -289,6 +346,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
 
   if (args.version) {
     console.log(`coms-net-bridge v${getVersion()}`);
+    process.exit(0);
+  }
+
+  if (args.peers || args.status) {
+    await showPeersBox(args);
     process.exit(0);
   }
 

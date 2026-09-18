@@ -1,11 +1,11 @@
-# Antigravity Coms-Net (`antigravity-coms-net`)
+# Poly Coms-Net (`poly-coms-net`)
 
 [![Node.js](https://img.shields.io/badge/Node.js-≥22.13.0-brightgreen.svg)](https://nodejs.org/)
-[![Antigravity CLI](https://img.shields.io/badge/Antigravity_CLI-≥1.1.28-blue.svg)](https://github.com/google/antigravity)
+[![Multi-Harness](https://img.shields.io/badge/Harnesses-Antigravity%20%7C%20Pi%20%7C%20Claude%20Code%20%7C%20Codex-blue.svg)](#overview)
 [![Zero Dependencies](https://img.shields.io/badge/Runtime_Dependencies-0-success.svg)](#zero-runtime-dependency-architecture)
-[![Tests](https://img.shields.io/badge/Tests-293_Passing-brightgreen.svg)](#testing)
+[![Tests](https://img.shields.io/badge/Tests-304_Passing-brightgreen.svg)](#testing)
 
-**Antigravity Coms-Net** is the official Antigravity CLI (`agy`) integration for the **coms-net multi-agent mesh network**. It enables Antigravity agents to join decentralized agent pools, discover active peers, send structured cross-agent prompts, await peer responses, and autonomously execute inbound turns dispatched by [Pi agents](https://github.com/mariozechner/pi-coding-agent) or peer Antigravity agents.
+**Poly Coms-Net** is the poly-harness integration and autonomous bridge engine for the **coms-net multi-agent mesh network**. It connects heterogeneous coding agent harnesses—including Google Antigravity (`agy`), [Pi Coding Agent](https://github.com/mariozechner/pi-coding-agent), Claude Code, Codex CLI, and cmux multiplexer environments—into a decentralized agent pool where peers discover each other, delegate structured cross-agent prompts, await responses, and autonomously execute inbound turns.
 
 ---
 
@@ -78,7 +78,7 @@ The `coms-net` mesh protocol establishes flat, bidirectional agent-to-agent comm
 
 ## Zero-Runtime-Dependency Architecture
 
-`antigravity-coms-net` ships with **0 production runtime dependencies** (`package.json` `"dependencies": {}`).
+`poly-coms-net` ships with **0 production runtime dependencies** (`package.json` `"dependencies": {}`).
 
 Every subsystem is engineered directly on native Node.js 22 built-ins:
 - **Transport & Networking**: Native global `fetch` and `node:http` for REST communication and streaming Server-Sent Events (SSE).
@@ -130,8 +130,8 @@ Follow these step-by-step instructions to clone, build, and verify the package:
 
 ### Step 1: Clone the Repository
 ```bash
-git clone git@github.com:Matt-Thom/antigravity-coms-net.git
-cd antigravity-coms-net
+git clone git@github.com:Matt-Thom/poly-coms-net.git
+cd poly-coms-net
 ```
 
 ### Step 2: Install Development Dependencies
@@ -202,7 +202,7 @@ Expected output:
 ```
 
 #### Step 3: Enable the Plugin
-- **Within this repository**: When running `agy` from within `antigravity-coms-net`, Antigravity automatically discovers and loads `.agents/plugins/coms-net/` from the repository root.
+- **Within this repository**: When running `agy` from within `poly-coms-net`, Antigravity automatically discovers and loads `.agents/plugins/coms-net/` from the repository root.
 - **Across other projects / globally**: Install the plugin into your global Antigravity configuration:
   ```bash
   agy plugin install .agents/plugins/coms-net
@@ -289,7 +289,7 @@ Console output:
 [bridge] Project: default (URL from file, token from secret_file)
 [bridge] Turn executor: AgyCliTurnExecutor (model: default)
 [bridge] Agent registered: agy-worker (session_id: 01J7ABCDEF0123456789ABCDEF)
-[bridge] Status: active, CWD: /home/matt/Code/antigravity-coms-net
+[bridge] Status: active, CWD: /home/matt/Code/poly-coms-net
 [bridge] SSE event stream connected. Listening for inbound prompts...
 ```
 

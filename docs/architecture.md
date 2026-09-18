@@ -1,8 +1,8 @@
-# Antigravity Coms-Net Architecture
+# Poly Coms-Net Architecture
 
 ## 1. System Overview
 
-`antigravity-coms-net` is an integration bridge that connects Antigravity CLI (`agy`) agents into the `coms-net` multi-agent communication mesh. It allows autonomous agents running in local or remote environments—including reference Pi agents and peer Antigravity agents—to collaborate as equal, decentralized peers.
+`poly-coms-net` is a poly-harness integration and autonomous bridge that connects heterogeneous AI agent harnesses—including Antigravity CLI (`agy`), Pi Coding Agent (`pi`), Claude Code, Codex CLI, and other agent frameworks—into the `coms-net` multi-agent communication mesh. It allows autonomous agents running across machines, projects, and harnesses to collaborate as equal, decentralized peers.
 
 ### Core Objectives
 1. **First-Class Antigravity Presence**: Provide Antigravity agents with a persistent identity (`AgentCard`), dynamic metrics reporting, and self-healing presence on the coms-net hub.
@@ -36,7 +36,7 @@
                          HTTP REST & SSE    |    Bearer Auth & Keepalive
                                             v
 +---------------------------------------------------------------------------------------+
-|                             Antigravity Coms-Net Bridge                               |
+|                               Poly Coms-Net Bridge                                    |
 |                                                                                       |
 |  +---------------------------+   +-------------------------------------------------+  |
 |  |    Discovery Subsystem    |   |            Protocol Client Subsystem            |  |

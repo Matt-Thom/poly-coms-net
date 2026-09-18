@@ -1,8 +1,8 @@
 {
-  "name": "antigravity-coms-net",
+  "name": "poly-coms-net",
   "version": "0.1.0",
   "type": "module",
-  "description": "Antigravity CLI integration for coms-net multi-agent mesh",
+  "description": "Poly-harness integration and autonomous bridge for coms-net multi-agent mesh",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {

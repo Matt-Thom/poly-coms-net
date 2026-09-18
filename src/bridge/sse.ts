@@ -1,7 +1,7 @@
 /**
  * src/bridge/sse.ts
  *
- * Antigravity Coms-Net SSE Streaming & Reconnection Engine.
+ * Poly-Harness Coms-Net SSE Streaming & Reconnection Engine.
  * Implements:
  * - SseParser: Zero-dependency WHATWG ReadableStream chunk decoder and frame parser.
  * - SseEventListener: Persistent event listener with exponential backoff and pre-reconnect upsert.

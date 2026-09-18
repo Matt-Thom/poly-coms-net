@@ -50,7 +50,7 @@ describe("Tier 4: Real-World Multi-Agent Workflows", () => {
       purpose: "Fullstack TypeScript engineer",
       model: "claude-opus-4-7",
       color: "#36F9F6",
-      cwd: "/home/matt/Code/antigravity-coms-net",
+      cwd: process.cwd(),
     });
     assert.strictEqual(agyReg.status, 200);
 

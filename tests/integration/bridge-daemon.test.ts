@@ -388,4 +388,40 @@ describe("BridgeDaemon Integration Tests", () => {
     await daemon.stop();
     await senderClient.deleteAgent(peerReg.agent.session_id, { project: "daemon-tests" });
   });
+
+  it("D7: should track peer cards from SSE pool events and render pool box", async () => {
+    const peer1 = await senderClient.registerAgent({
+      project: "daemon-tests",
+      session_id: "01JMPEER000000000000000003",
+      name: "peer-impl",
+      model: "grok-4.6",
+      purpose: "Forge implementer",
+    });
+
+    const daemon = new BridgeDaemon({
+      client,
+      name: "daemon-watcher",
+      turnExecutor: new MockTurnExecutor(),
+    });
+
+    await daemon.start();
+
+    // Wait for initial pool_snapshot or peer tracking
+    for (let i = 0; i < 30; i++) {
+      if (daemon.getPeers().length > 0) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    const peers = daemon.getPeers();
+    assert.ok(peers.some((p) => p.name === "peer-impl"));
+
+    const box = daemon.renderPool({ width: 120 });
+    assert.ok(box.includes("┏━ coms-net ━"));
+    assert.ok(box.includes("daemon-watcher ━┓"));
+    assert.ok(box.includes("peer-impl"));
+    assert.ok(box.includes("Forge implementer"));
+
+    await daemon.stop();
+    await senderClient.deleteAgent(peer1.agent.session_id, { project: "daemon-tests" });
+  });
 });

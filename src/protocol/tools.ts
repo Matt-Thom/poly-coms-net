@@ -23,8 +23,10 @@ import type {
   InboundContext,
 } from "./types.ts";
 import { HopLimitExceededError } from "./errors.ts";
+import { renderComsNetBox, abbreviateModel } from "./render.ts";
 
 export type { InboundContext };
+export { abbreviateModel };
 
 // ━━ Constants ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -60,15 +62,6 @@ export function generateUlid(now: number = Date.now()): string {
   return (timeStr + randStr).slice(0, 26);
 }
 
-/**
- * Abbreviates model IDs for compact display.
- */
-export function abbreviateModel(model?: string): string {
-  let m = model || "";
-  if (m.startsWith("claude-")) m = m.slice("claude-".length);
-  if (m.length > 14) m = m.slice(0, 14);
-  return m;
-}
 
 /**
  * Formats a list of peer agents into compact human-readable text.
@@ -188,8 +181,12 @@ export class ComsNetTools {
       (a) => a.session_id !== this.ctx.identity.session_id
     );
 
-    const rosterText = formatPeerRoster(peers);
-    const text = `${peers.length} peer(s):\n${rosterText}`;
+    const boxText = renderComsNetBox({
+      agents: peers,
+      currentAgentName: this.ctx.identity.name,
+      useColor: false,
+    });
+    const text = `${peers.length} peer(s):\n${boxText}`;
 
     return {
       content: [{ type: "text", text }],

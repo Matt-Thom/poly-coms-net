@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "coms-net": {
+      "command": "node",
+      "args": ["dist/mcp/server.js"],
+      "env": {},
+      "disabled": false
+    }
+  }
+}

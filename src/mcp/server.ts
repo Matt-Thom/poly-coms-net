@@ -309,7 +309,7 @@ export class McpServer {
           },
         },
         serverInfo: {
-          name: "antigravity-coms-net",
+          name: "poly-coms-net",
           version: "0.1.0",
         },
       },

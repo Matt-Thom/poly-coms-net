@@ -1,7 +1,7 @@
 /**
  * src/bridge/daemon.ts
  *
- * BridgeDaemon: Unified coordinator for the Antigravity Coms-Net bridge.
+ * BridgeDaemon: Unified coordinator for the Poly-Harness Coms-Net bridge.
  * Integrates:
  * - AgentLifecycle: AgentCard generation, registration & 10s heartbeat loop
  * - SseEventListener: resilient SSE connection with exponential backoff
@@ -30,6 +30,7 @@ import {
   validateResponseSchema,
 } from "./turn-executor.ts";
 import { redactToken } from "../protocol/errors.ts";
+import { renderComsNetBox, type RenderComsNetBoxOptions } from "../protocol/render.ts";
 
 export type DaemonStatus =
   | "uninitialized"
@@ -77,6 +78,7 @@ export class BridgeDaemon extends EventEmitter {
   private readonly maxConcurrentTurns: number;
 
   public readonly pendingReplies = new Map<string, PendingReply>();
+  public readonly peerCards = new Map<string, AgentCard>();
   private tools: ComsNetTools | null = null;
 
   private boundSigint: (() => void) | null = null;
@@ -152,6 +154,21 @@ export class BridgeDaemon extends EventEmitter {
     return this.inboundQueue.size;
   }
 
+  public getPeers(): AgentCard[] {
+    return Array.from(this.peerCards.values());
+  }
+
+  public renderPool(options: Partial<RenderComsNetBoxOptions> = {}): string {
+    const card = this.getIdentity();
+    return renderComsNetBox({
+      agents: this.getPeers(),
+      currentAgentName: card?.name,
+      currentAgentColor: card?.color,
+      currentSessionId: card?.session_id,
+      ...options,
+    });
+  }
+
   // ━━ Start & Registration ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   async start(): Promise<AgentCard> {
@@ -200,17 +217,75 @@ export class BridgeDaemon extends EventEmitter {
     this.sse.on("disconnected", (reason, err) => this.emit("sse_disconnected", reason, err));
     this.sse.on("ping", (ts) => this.emit("ping", ts));
 
-    // Forward remaining hub events
-    for (const evt of [
-      "hello",
-      "pool_snapshot",
-      "agent_joined",
-      "agent_updated",
-      "agent_stale",
-      "agent_left",
-      "message_status",
-      "error",
-    ]) {
+    // Track pool snapshot & peer presence events
+    this.sse.on("pool_snapshot", (payload) => {
+      this.peerCards.clear();
+      const agents = Array.isArray(payload?.agents) ? payload.agents : [];
+      for (const a of agents) {
+        if (a?.session_id && (!this.identity || a.session_id !== this.identity.session_id)) {
+          this.peerCards.set(a.session_id, a);
+        }
+      }
+      this.emit("pool_snapshot", payload);
+      this.emit("pool_updated", {
+        agents: this.getPeers(),
+        rendered: this.renderPool(),
+      });
+    });
+
+    this.sse.on("agent_joined", (payload) => {
+      const a = payload?.agent;
+      if (a?.session_id && (!this.identity || a.session_id !== this.identity.session_id)) {
+        this.peerCards.set(a.session_id, a);
+      }
+      this.emit("agent_joined", payload);
+      this.emit("pool_updated", {
+        agents: this.getPeers(),
+        rendered: this.renderPool(),
+      });
+    });
+
+    this.sse.on("agent_updated", (payload) => {
+      const patch = payload?.agent;
+      if (patch?.session_id) {
+        const existing = this.peerCards.get(patch.session_id);
+        if (existing) {
+          this.peerCards.set(patch.session_id, { ...existing, ...patch });
+        }
+      }
+      this.emit("agent_updated", payload);
+      this.emit("pool_updated", {
+        agents: this.getPeers(),
+        rendered: this.renderPool(),
+      });
+    });
+
+    this.sse.on("agent_stale", (payload) => {
+      if (payload?.session_id) {
+        const existing = this.peerCards.get(payload.session_id);
+        if (existing) {
+          existing.status = "stale";
+        }
+      }
+      this.emit("agent_stale", payload);
+      this.emit("pool_updated", {
+        agents: this.getPeers(),
+        rendered: this.renderPool(),
+      });
+    });
+
+    this.sse.on("agent_left", (payload) => {
+      if (payload?.session_id) {
+        this.peerCards.delete(payload.session_id);
+      }
+      this.emit("agent_left", payload);
+      this.emit("pool_updated", {
+        agents: this.getPeers(),
+        rendered: this.renderPool(),
+      });
+    });
+
+    for (const evt of ["hello", "message_status", "error"]) {
       this.sse.on(evt, (data) => this.emit(evt, data));
     }
 
@@ -408,10 +483,11 @@ export class BridgeDaemon extends EventEmitter {
       // Best effort
     }
 
-    // 3. Clear queues
+    // 3. Clear queues & pool cache
     this.inboundQueue.clear();
     this.turnFifo.length = 0;
     this.currentInbound = null;
+    this.peerCards.clear();
 
     this.status = "stopped";
     this.emit("status", this.status);

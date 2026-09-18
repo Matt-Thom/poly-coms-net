@@ -226,7 +226,7 @@ describe("McpServer Stdio Unit Tests", () => {
       };
       assert.strictEqual(result.protocolVersion, "2024-11-05");
       assert.strictEqual(result.capabilities.tools.listChanged, false);
-      assert.strictEqual(result.serverInfo.name, "antigravity-coms-net");
+      assert.strictEqual(result.serverInfo.name, "poly-coms-net");
       assert.strictEqual(result.serverInfo.version, "0.1.0");
       await h.cleanup();
     });
