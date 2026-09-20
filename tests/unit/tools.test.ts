@@ -390,5 +390,38 @@ describe("ComsNetTools Protocol Implementations", () => {
     assert.equal(res.details.status, "timeout");
     assert.equal(res.details.error, "timeout");
     assert.equal(httpAborted, true, "HTTP request should be aborted on timeout");
+
+    // R1 requirement: timeout must not be cached in pendingReplies
+    const pending = pendingReplies.get("msg-timeout");
+    assert.equal(pending?.result, undefined, "Timeout error must not be cached in pending.result");
+  });
+
+  it("should not cache transient network failures in pending.result and query hub afresh", async () => {
+    let getCalled = false;
+    toolCtx.client.awaitMessage = async () => {
+      throw new Error("Network request failed (GET /v1/messages/msg-fail/await): fetch failed (code: UND_ERR_SOCKET)");
+    };
+    toolCtx.client.getMessage = async (msgId: string) => {
+      getCalled = true;
+      return {
+        msg_id: msgId,
+        status: "complete",
+        response: "fresh hub query",
+        error: null,
+      };
+    };
+
+    const tools = new ComsNetTools(toolCtx);
+    const awaitRes = await tools.await({ msg_id: "msg-fail", timeout_ms: 50 });
+    assert.equal(awaitRes.details.status, "error");
+    assert.equal(awaitRes.isError, true);
+
+    const pending = pendingReplies.get("msg-fail");
+    assert.equal(pending?.result, undefined, "Network failure must not be cached in pending.result");
+
+    const getRes = await tools.get({ msg_id: "msg-fail" });
+    assert.equal(getCalled, true, "Subsequent get must query hub afresh");
+    assert.equal(getRes.details.status, "complete");
+    assert.equal(getRes.details.response, "fresh hub query");
   });
 });

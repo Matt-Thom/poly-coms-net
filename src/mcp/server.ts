@@ -10,8 +10,9 @@ import * as readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { discoverHub } from "../protocol/discovery.ts";
 import { ComsNetClient } from "../protocol/client.ts";
-import { ComsNetTools, type PendingReply } from "../protocol/tools.ts";
+import { ComsNetTools, type PendingReply, type PendingReplyResult } from "../protocol/tools.ts";
 import { AgentLifecycle } from "../bridge/lifecycle.ts";
+import { SseEventListener } from "../bridge/sse.ts";
 import type {
   DiscoveryOptions,
   DiscoveryResult,
@@ -19,6 +20,7 @@ import type {
   ToolSendParams,
   ToolGetParams,
   ToolAwaitParams,
+  ResponsePayload,
 } from "../protocol/types.ts";
 
 // ── JSON-RPC 2.0 Protocol Types ─────────────────────────────────────────────
@@ -59,6 +61,8 @@ export interface McpServerOptions {
   agentName?: string;
   agentPurpose?: string;
   logFn?: (message: string) => void;
+  fetchFn?: typeof fetch;
+  sse?: SseEventListener;
 }
 
 // ── Tool Definitions ────────────────────────────────────────────────────────
@@ -158,11 +162,13 @@ export class McpServer {
   private client: ComsNetClient | null = null;
   private tools: ComsNetTools | null = null;
   private lifecycle: AgentLifecycle | null = null;
-  private readonly pendingReplies = new Map<string, PendingReply>();
+  private sse: SseEventListener | null = null;
+  public readonly pendingReplies = new Map<string, PendingReply>();
 
   private rl: readline.Interface | null = null;
   private initialized = false;
   private isRunning = false;
+  private initPromise: Promise<ComsNetTools> | null = null;
 
   constructor(options: McpServerOptions = {}) {
     this.options = options;
@@ -178,6 +184,65 @@ export class McpServer {
       this.lifecycle.on("error", (err) => {
         console.error("[coms-net-mcp] Lifecycle error:", err);
       });
+    }
+    if (options.sse) {
+      this.sse = options.sse;
+      this.sse.on("response", (payload: ResponsePayload) => {
+        this.handleInboundResponse(payload);
+      });
+      this.sse.on("error", (err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        this.log(`SSE error: ${message}`);
+      });
+    }
+  }
+
+  public getSse(): SseEventListener | null {
+    return this.sse;
+  }
+
+  public getPendingReplies(): Map<string, PendingReply> {
+    return this.pendingReplies;
+  }
+
+  public handleInboundResponse(payload: ResponsePayload): void {
+    if (!payload?.msg_id) return;
+    let pending = this.pendingReplies.get(payload.msg_id);
+    if (!pending) {
+      let resolveFn!: (v: PendingReplyResult) => void;
+      let rejectFn!: (e: Error) => void;
+      const prom = new Promise<PendingReplyResult>((res, rej) => {
+        resolveFn = res;
+        rejectFn = rej;
+      });
+      pending = {
+        resolve: resolveFn,
+        reject: rejectFn,
+        promise: prom,
+        created_at: new Date().toISOString(),
+      };
+      this.pendingReplies.set(payload.msg_id, pending);
+    }
+    const isTransient =
+      payload.error === "timeout" ||
+      payload.error === "aborted" ||
+      payload.error === "unknown msg_id" ||
+      payload.error === "network_error" ||
+      payload.error === "" ||
+      (typeof payload.error === "string" && payload.error.startsWith("Network request failed"));
+
+    const result: PendingReplyResult = {
+      response: payload.response,
+      error: payload.error ?? null,
+    };
+
+    if (!isTransient) {
+      pending.result = result;
+      try {
+        pending.resolve(result);
+      } catch {
+        // Already settled
+      }
     }
   }
 
@@ -204,12 +269,20 @@ export class McpServer {
   }
 
   public async stop(): Promise<void> {
-    if (!this.isRunning) return;
     this.isRunning = false;
 
     if (this.rl) {
       this.rl.close();
       this.rl = null;
+    }
+
+    if (this.sse) {
+      try {
+        await this.sse.stop();
+      } catch (err) {
+        this.log(`Error during SSE listener stop: ${err}`);
+      }
+      this.sse = null;
     }
 
     if (this.lifecycle) {
@@ -428,82 +501,125 @@ export class McpServer {
 
   private async ensureInitialized(): Promise<ComsNetTools> {
     if (this.tools) return this.tools;
+    if (this.initPromise) return this.initPromise;
 
-    let client = this.client;
-    if (!client) {
-      let discovery: DiscoveryResult;
+    this.initPromise = (async () => {
       try {
-        discovery = await discoverHub(this.options.discoveryOptions);
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `coms-net hub discovery failed: ${message}\n` +
-          `Ensure the coms-net server is running or set PI_COMS_NET_SERVER_URL and PI_COMS_NET_AUTH_TOKEN.`
-        );
+        let client = this.client;
+        if (!client) {
+          let discovery: DiscoveryResult;
+          try {
+            discovery = await discoverHub(this.options.discoveryOptions);
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            throw new Error(
+              `coms-net hub discovery failed: ${message}\n` +
+              `Ensure the coms-net server is running or set PI_COMS_NET_SERVER_URL and PI_COMS_NET_AUTH_TOKEN.`
+            );
+          }
+
+          client = new ComsNetClient({
+            baseUrl: discovery.config.baseUrl,
+            authToken: discovery.config.authToken,
+            project: discovery.config.project,
+          });
+          this.client = client;
+        }
+
+        let lifecycle = this.lifecycle;
+        if (!lifecycle) {
+          lifecycle = new AgentLifecycle({
+            client,
+            name: this.options.agentName || process.env.COMS_NET_AGENT_NAME || "antigravity-mcp",
+            purpose: this.options.agentPurpose || "Antigravity CLI MCP Client",
+            model: process.env.COMS_NET_MODEL || "gemini-3.7-flash-high",
+            provider: "antigravity",
+            explicit: true,
+            heartbeatIntervalMs: 10_000,
+            autoInstallSignalHandlers: false,
+          });
+
+          lifecycle.on("error", (err) => {
+            console.error("[coms-net-mcp] Lifecycle error:", err);
+          });
+
+          try {
+            await lifecycle.start();
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            throw new Error(
+              `Failed to register MCP client with coms-net hub: ${message}`
+            );
+          }
+          this.lifecycle = lifecycle;
+        } else if (!lifecycle.getCard()) {
+          try {
+            await lifecycle.start();
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            throw new Error(
+              `Failed to register MCP client with coms-net hub: ${message}`
+            );
+          }
+        }
+
+        const card = lifecycle.getCard();
+        if (!card) {
+          throw new Error("Failed to obtain agent card from lifecycle");
+        }
+
+        if (!this.sse) {
+          this.sse = this.options.sse ?? new SseEventListener({
+            baseUrl: client.baseUrl,
+            authToken: client.authToken,
+            project: card.project,
+            sessionId: card.session_id,
+            fetchFn: this.options.fetchFn,
+            registerFn: () => lifecycle!.reRegister(),
+          });
+
+          this.sse.on("response", (payload: ResponsePayload) => {
+            this.handleInboundResponse(payload);
+          });
+
+          this.sse.on("error", (err: unknown) => {
+            const message = err instanceof Error ? err.message : String(err);
+            this.log(`SSE error: ${message}`);
+          });
+
+          try {
+            await this.sse.start();
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            this.log(`Failed to start SSE listener: ${message}`);
+          }
+        } else if (this.sse.getState() === "disconnected") {
+          try {
+            await this.sse.start();
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            this.log(`Failed to start SSE listener: ${message}`);
+          }
+        }
+
+        this.tools = new ComsNetTools({
+          client,
+          identity: {
+            session_id: card.session_id,
+            name: card.name,
+            project: card.project,
+            cwd: card.cwd,
+          },
+          pendingReplies: this.pendingReplies,
+        });
+
+        return this.tools;
+      } finally {
+        this.initPromise = null;
       }
+    })();
 
-      client = new ComsNetClient({
-        baseUrl: discovery.config.baseUrl,
-        authToken: discovery.config.authToken,
-        project: discovery.config.project,
-      });
-      this.client = client;
-    }
-
-    let lifecycle = this.lifecycle;
-    if (!lifecycle) {
-      lifecycle = new AgentLifecycle({
-        client,
-        name: this.options.agentName || process.env.COMS_NET_AGENT_NAME || "antigravity-mcp",
-        purpose: this.options.agentPurpose || "Antigravity CLI MCP Client",
-        model: process.env.COMS_NET_MODEL || "gemini-3.7-flash-high",
-        provider: "antigravity",
-        explicit: true,
-        heartbeatIntervalMs: 10_000,
-        autoInstallSignalHandlers: false,
-      });
-
-      lifecycle.on("error", (err) => {
-        console.error("[coms-net-mcp] Lifecycle error:", err);
-      });
-
-      try {
-        await lifecycle.start();
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `Failed to register MCP client with coms-net hub: ${message}`
-        );
-      }
-      this.lifecycle = lifecycle;
-    } else if (!lifecycle.getCard()) {
-      try {
-        await lifecycle.start();
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
-        throw new Error(
-          `Failed to register MCP client with coms-net hub: ${message}`
-        );
-      }
-    }
-
-    const card = lifecycle.getCard();
-    if (!card) {
-      throw new Error("Failed to obtain agent card from lifecycle");
-    }
-
-    this.tools = new ComsNetTools({
-      client,
-      identity: {
-        session_id: card.session_id,
-        name: card.name,
-        project: card.project,
-        cwd: card.cwd,
-      },
-      pendingReplies: this.pendingReplies,
-    });
-
-    return this.tools;
+    return this.initPromise;
   }
 
   private send(resp: JsonRpcResponse): void {

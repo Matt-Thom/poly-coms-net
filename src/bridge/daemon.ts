@@ -411,14 +411,26 @@ export class BridgeDaemon extends EventEmitter {
     if (!payload?.msg_id) return;
     const pending = this.pendingReplies.get(payload.msg_id);
     if (pending) {
-      pending.result = {
+      const isTransient =
+        payload.error === "timeout" ||
+        payload.error === "aborted" ||
+        payload.error === "unknown msg_id" ||
+        payload.error === "network_error" ||
+        payload.error === "" ||
+        (typeof payload.error === "string" && payload.error.startsWith("Network request failed"));
+
+      const result = {
         response: payload.response,
-        error: payload.error,
+        error: payload.error ?? null,
       };
-      try {
-        pending.resolve(pending.result);
-      } catch {
-        // Already settled
+
+      if (!isTransient) {
+        pending.result = result;
+        try {
+          pending.resolve(result);
+        } catch {
+          // Already settled
+        }
       }
     }
   }

@@ -46,6 +46,7 @@ export interface RequestOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   headers?: Record<string, string>;
+  retries?: number;
 }
 
 export class ComsNetClient {
@@ -122,6 +123,7 @@ export class ComsNetClient {
     }
 
     let resp: Response;
+    let rawText: string;
     try {
       resp = await this.fetchFn(url, {
         method,
@@ -129,12 +131,65 @@ export class ComsNetClient {
         body: serializedBody,
         signal: ac.signal,
       });
+
+      // Guard response body read against timeout & abort
+      if (ac.signal.aborted) {
+        try {
+          resp.body?.cancel?.().catch?.(() => {});
+        } catch {
+          // ignore
+        }
+        throw ac.signal.reason ?? new RequestTimeoutError(method, urlPath, timeoutMs, this.authToken);
+      }
+
+      const bodyPromise = resp.text();
+      rawText = await (ac.signal.aborted
+        ? (() => {
+            try {
+              resp.body?.cancel?.().catch?.(() => {});
+            } catch {
+              // ignore
+            }
+            return Promise.reject(
+              ac.signal.reason ??
+                new RequestTimeoutError(method, urlPath, timeoutMs, this.authToken)
+            );
+          })()
+        : new Promise<string>((resolve, reject) => {
+            const onAbort = () => {
+              try {
+                resp.body?.cancel?.().catch?.(() => {});
+              } catch {
+                // ignore
+              }
+              reject(
+                ac.signal.reason ??
+                  new RequestTimeoutError(method, urlPath, timeoutMs, this.authToken)
+              );
+            };
+            ac.signal.addEventListener("abort", onAbort, { once: true });
+            bodyPromise.then(
+              (txt) => {
+                ac.signal.removeEventListener("abort", onAbort);
+                resolve(txt);
+              },
+              (err) => {
+                ac.signal.removeEventListener("abort", onAbort);
+                reject(err);
+              }
+            );
+          }));
     } catch (err: unknown) {
       if (ac.signal.aborted && ac.signal.reason instanceof RequestTimeoutError) {
         throw ac.signal.reason;
       }
       if (opts?.signal?.aborted) {
-        throw opts.signal.reason;
+        throw opts.signal.reason ?? new Error("Operation aborted");
+      }
+      if (ac.signal.aborted && !opts?.signal?.aborted) {
+        throw ac.signal.reason instanceof RequestTimeoutError
+          ? ac.signal.reason
+          : new RequestTimeoutError(method, urlPath, timeoutMs, this.authToken);
       }
       throw this.classifyNetworkError(err, method, urlPath, timeoutMs);
     } finally {
@@ -142,11 +197,20 @@ export class ComsNetClient {
       if (removeExternalAbort) removeExternalAbort();
     }
 
-    const rawText = await resp.text();
     let parsed: unknown = null;
-    if (rawText.length > 0) {
+    let jsonText = rawText.trimStart();
+    while (jsonText.startsWith(":")) {
+      const newlineIdx = jsonText.indexOf("\n");
+      if (newlineIdx === -1) {
+        jsonText = "";
+        break;
+      }
+      jsonText = jsonText.slice(newlineIdx + 1).trimStart();
+    }
+    jsonText = jsonText.trimEnd();
+    if (jsonText.length > 0) {
       try {
-        parsed = JSON.parse(rawText);
+        parsed = JSON.parse(jsonText);
       } catch {
         parsed = rawText;
       }
@@ -249,15 +313,46 @@ export class ComsNetClient {
     const qs = new URLSearchParams({ timeout_ms: String(timeoutMs) });
     const path = `/v1/messages/${encodeURIComponent(msgId)}/await?${qs.toString()}`;
 
-    return this.request<AwaitMessageResponse>(
-      "GET",
-      path,
-      undefined,
-      {
-        timeoutMs: reqOpts?.timeoutMs ?? networkTimeout,
-        ...reqOpts,
+    const maxRetries = reqOpts?.retries ?? 0;
+    let attempt = 0;
+    while (true) {
+      try {
+        return await this.request<AwaitMessageResponse>(
+          "GET",
+          path,
+          undefined,
+          {
+            ...reqOpts,
+            timeoutMs: reqOpts?.timeoutMs ?? networkTimeout,
+          }
+        );
+      } catch (err: unknown) {
+        attempt++;
+        if (
+          attempt > maxRetries ||
+          reqOpts?.signal?.aborted ||
+          err instanceof RequestTimeoutError
+        ) {
+          throw err;
+        }
+        if (reqOpts?.signal?.aborted) {
+          throw reqOpts.signal.reason ?? err;
+        }
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, 100);
+          if (reqOpts?.signal) {
+            const onAbort = () => {
+              clearTimeout(t);
+              resolve();
+            };
+            reqOpts.signal.addEventListener("abort", onAbort, { once: true });
+          }
+        });
+        if (reqOpts?.signal?.aborted) {
+          throw reqOpts.signal.reason ?? err;
+        }
       }
-    );
+    }
   }
 
   /** POST /v1/messages/:msg_id/response (Submit assistant turn output) */
@@ -354,31 +449,93 @@ export class ComsNetClient {
       name?: string;
       message?: string;
       code?: string;
-      cause?: { code?: string; message?: string };
+      cause?: unknown;
     };
     const message = errorObj?.message ?? String(err);
-    const causeCode = errorObj?.cause?.code ?? errorObj?.code;
+    const causeObj = (errorObj?.cause && typeof errorObj.cause === "object"
+      ? errorObj.cause
+      : undefined) as {
+      name?: string;
+      message?: string;
+      code?: string;
+      cause?: unknown;
+    } | undefined;
+
+    const nested = (causeObj?.cause && typeof causeObj.cause === "object"
+      ? causeObj.cause
+      : undefined) as { name?: string; message?: string; code?: string } | undefined;
+
+    const causeCode = causeObj?.code ?? nested?.code ?? errorObj?.code;
 
     if (
       causeCode === "ECONNREFUSED" ||
       message.includes("ECONNREFUSED") ||
       causeCode === "ENOTFOUND" ||
+      message.includes("ENOTFOUND") ||
       causeCode === "EHOSTUNREACH" ||
+      message.includes("EHOSTUNREACH") ||
       causeCode === "EADDRNOTAVAIL"
     ) {
       return new ConnectionRefusedError(
         `${this.baseUrl}${url}`,
-        (errorObj?.cause as Error) ?? (err as Error),
+        (causeObj as Error) ?? (err as Error),
         this.authToken
       );
     }
 
-    if (errorObj?.name === "AbortError" || message.includes("aborted")) {
+    const isAbortError =
+      causeCode !== "ECONNABORTED" &&
+      errorObj?.code !== "ECONNABORTED" &&
+      (errorObj?.name === "AbortError" ||
+        causeObj?.name === "AbortError" ||
+        errorObj?.name === "TimeoutError" ||
+        causeObj?.name === "TimeoutError" ||
+        causeCode === "ABORT_ERR" ||
+        message === "This operation was aborted" ||
+        message === "The operation was aborted" ||
+        message.includes("operation was aborted"));
+
+    if (isAbortError) {
       return new RequestTimeoutError(method, url, timeoutMs, this.authToken);
     }
 
+    // Retain underlying cause properties (code, name, message, nested cause)
+    let details = message;
+    if (causeObj) {
+      const causeParts: string[] = [];
+      if (causeObj.code) {
+        causeParts.push(`code: ${causeObj.code}`);
+      }
+      if (causeObj.name && causeObj.name !== "Error" && causeObj.name !== causeObj.code) {
+        causeParts.push(`name: ${causeObj.name}`);
+      }
+      if (causeObj.message && causeObj.message !== message) {
+        causeParts.push(causeObj.message);
+      }
+      if (nested) {
+        if (nested.code && nested.code !== causeObj.code) {
+          causeParts.push(`cause code: ${nested.code}`);
+        }
+        if (nested.message && nested.message !== causeObj.message) {
+          causeParts.push(`cause: ${nested.message}`);
+        }
+      } else if (typeof causeObj.cause === "string") {
+        causeParts.push(`cause: ${causeObj.cause}`);
+      }
+
+      if (causeParts.length > 0) {
+        details = `${message} (${causeParts.join(", ")})`;
+      } else if (typeof errorObj.cause === "string") {
+        details = `${message} (${errorObj.cause})`;
+      }
+    } else if (errorObj?.cause) {
+      details = `${message} (${String(errorObj.cause)})`;
+    }
+
     return new ComsNetError(
-      redactToken(`Network request failed (${method} ${url}): ${message}`, this.authToken)
+      redactToken(`Network request failed (${method} ${url}): ${details}`, this.authToken),
+      this.authToken,
+      causeCode
     );
   }
 }
