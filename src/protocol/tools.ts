@@ -351,9 +351,39 @@ export class ComsNetTools {
               : JSON.stringify(resp.response, null, 2)
           }`;
 
-      // Cache result locally
-      if (pending) {
-        pending.result = { response: resp.response, error: resp.error };
+      // Only cache genuine terminal replies:
+      // HTTP status === "complete" or hub status === "error" with an explicit error payload.
+      // NEVER cache transient transport failures, socket drops, fetch aborts, or timeouts.
+      const isTerminal =
+        status === "complete" ||
+        (status === "error" &&
+          resp.error !== null &&
+          resp.error !== undefined &&
+          resp.error !== "" &&
+          resp.error !== "timeout" &&
+          resp.error !== "aborted" &&
+          resp.error !== "unknown msg_id" &&
+          resp.error !== "network_error" &&
+          !resp.error.startsWith("Network request failed"));
+
+      if (isTerminal) {
+        let targetPending = pending;
+        if (!targetPending) {
+          let resolveFn!: (v: PendingReplyResult) => void;
+          let rejectFn!: (e: Error) => void;
+          const prom = new Promise<PendingReplyResult>((res, rej) => {
+            resolveFn = res;
+            rejectFn = rej;
+          });
+          targetPending = {
+            resolve: resolveFn,
+            reject: rejectFn,
+            promise: prom,
+            created_at: new Date().toISOString(),
+          };
+          this.ctx.pendingReplies.set(msgId, targetPending);
+        }
+        targetPending.result = { response: resp.response, error: resp.error };
       }
 
       return {
@@ -392,11 +422,12 @@ export class ComsNetTools {
         ? params.timeout_ms
         : defaultTimeout;
 
-    // Fast path: In-memory SSE cache check
+    // Fast path: In-memory SSE cache check (only populated for genuine terminal replies)
     const pending = this.ctx.pendingReplies.get(msgId);
     if (pending?.result) {
       const r = pending.result;
-      if (r.error) {
+      const isErr = r.error !== null && r.error !== undefined;
+      if (isErr) {
         return {
           content: [
             { type: "text", text: `coms_net_await: error — ${r.error}` },
@@ -441,39 +472,85 @@ export class ComsNetTools {
       localPromise = prom;
     }
 
+    type AwaitCompetitor =
+      | { source: "sse"; response?: unknown; error?: string | null }
+      | {
+          source: "http";
+          status: "complete" | "error" | "timeout" | "transient";
+          response?: unknown;
+          error?: string | null;
+        }
+      | { source: "timeout"; response: null; error: "timeout" };
+
+    const localCompetitor: Promise<AwaitCompetitor> = localPromise
+      .then((v) => ({
+        source: "sse" as const,
+        response: v.response,
+        error: v.error,
+      }))
+      .catch((err: unknown): AwaitCompetitor => ({
+        source: "sse" as const,
+        response: null,
+        error: err instanceof Error ? err.message : String(err),
+      }));
+
     // ━━ Competitor 2: Server HTTP Long-Poll with AbortController ━━
     const ac = new AbortController();
     const serverTimeoutMs = Math.min(timeoutMs, defaultTimeout);
-    const serverPromise: Promise<PendingReplyResult> = this.ctx.client
+    const serverCompetitor: Promise<AwaitCompetitor> = this.ctx.client
       .awaitMessage(msgId, serverTimeoutMs, ac.signal)
-      .then((data) => {
+      .then((data): AwaitCompetitor => {
         if (data.status === "complete") {
-          return { response: data.response, error: null };
+          return { source: "http", status: "complete", response: data.response, error: null };
         }
         if (data.status === "error") {
-          return { response: null, error: data.error ?? "error" };
+          const isExplicit =
+            data.error !== null &&
+            data.error !== undefined &&
+            data.error !== "" &&
+            data.error !== "timeout" &&
+            data.error !== "aborted" &&
+            data.error !== "unknown msg_id" &&
+            data.error !== "network_error" &&
+            !data.error.startsWith("Network request failed");
+          return {
+            source: "http",
+            status: isExplicit ? "error" : "transient",
+            response: null,
+            error: data.error ?? "error",
+          };
         }
         if (data.status === "timeout") {
-          return { response: null, error: "timeout" };
+          return { source: "http", status: "timeout", response: null, error: "timeout" };
         }
-        return { response: data.response, error: data.error ?? null };
+        return {
+          source: "http",
+          status: "complete",
+          response: data.response,
+          error: data.error ?? null,
+        };
       })
-      .catch((err: unknown) => {
+      .catch((err: unknown): AwaitCompetitor => {
         const errorObj = err as { name?: string; status?: number; message?: string };
         if (errorObj?.name === "AbortError" || ac.signal.aborted) {
-          return { response: null, error: "aborted" };
+          return { source: "http", status: "transient", response: null, error: "aborted" };
         }
         if (errorObj?.status === 404 || errorObj?.message?.includes("404")) {
-          return { response: null, error: "unknown msg_id" };
+          return { source: "http", status: "transient", response: null, error: "unknown msg_id" };
         }
-        return { response: null, error: errorObj?.message ?? "network_error" };
+        return {
+          source: "http",
+          status: "transient",
+          response: null,
+          error: errorObj?.message ?? "network_error",
+        };
       });
 
     // ━━ Competitor 3: Client Timeout Timer ━━
     let timer: NodeJS.Timeout | null = null;
-    const timeoutPromise = new Promise<PendingReplyResult>((resolve) => {
+    const timeoutCompetitor = new Promise<AwaitCompetitor>((resolve) => {
       timer = setTimeout(() => {
-        resolve({ response: null, error: "timeout" });
+        resolve({ source: "timeout", response: null, error: "timeout" });
       }, timeoutMs);
       try {
         (timer as { unref?: () => void }).unref?.();
@@ -484,9 +561,9 @@ export class ComsNetTools {
 
     try {
       const winner = await Promise.race([
-        localPromise,
-        serverPromise,
-        timeoutPromise,
+        localCompetitor,
+        serverCompetitor,
+        timeoutCompetitor,
       ]);
 
       // Abort HTTP request immediately upon settling!
@@ -496,15 +573,59 @@ export class ComsNetTools {
         // ignore
       }
 
-      // Cache result if not aborted
-      if (winner && winner.error !== "aborted") {
-        const targetPending = this.ctx.pendingReplies.get(msgId);
-        if (targetPending) {
-          targetPending.result = winner;
+      // ONLY populate pendingReplies.get(msgId).result for genuine terminal replies:
+      // - Valid SSE response payload
+      // - HTTP status === "complete"
+      // - Hub status === "error" with an explicit error payload
+      // NEVER cache transient transport failures, socket drops, fetch aborts, or timeouts.
+      let isTerminal = false;
+      let finalResult: PendingReplyResult | null = null;
+
+      if (winner.source === "sse") {
+        const isTransient =
+          winner.error === "timeout" ||
+          winner.error === "aborted" ||
+          winner.error === "unknown msg_id" ||
+          winner.error === "network_error" ||
+          winner.error === "" ||
+          (typeof winner.error === "string" && winner.error.startsWith("Network request failed"));
+        if (!isTransient) {
+          isTerminal = true;
+          finalResult = { response: winner.response, error: winner.error ?? null };
+        } else {
+          // Reset targetPending with a fresh unresolved promise so subsequent await/get calls
+          // continue to race a live SSE promise against the HTTP long-poll
+          const targetPending = this.ctx.pendingReplies.get(msgId);
+          if (targetPending) {
+            let resolveFn!: (v: PendingReplyResult) => void;
+            let rejectFn!: (e: Error) => void;
+            const prom = new Promise<PendingReplyResult>((res, rej) => {
+              resolveFn = res;
+              rejectFn = rej;
+            });
+            targetPending.resolve = resolveFn;
+            targetPending.reject = rejectFn;
+            targetPending.promise = prom;
+          }
+        }
+      } else if (winner.source === "http") {
+        if (winner.status === "complete") {
+          isTerminal = true;
+          finalResult = { response: winner.response, error: null };
+        } else if (winner.status === "error") {
+          isTerminal = true;
+          finalResult = { response: null, error: winner.error ?? "error" };
         }
       }
 
-      if (winner.error && winner.error !== "aborted") {
+      if (isTerminal && finalResult) {
+        const targetPending = this.ctx.pendingReplies.get(msgId);
+        if (targetPending) {
+          targetPending.result = finalResult;
+        }
+      }
+
+      if (winner.error) {
         const status = winner.error === "timeout" ? "timeout" : "error";
         return {
           content: [
