@@ -24,9 +24,11 @@
     "test:integration": "node --test --experimental-strip-types tests/integration/*.test.ts",
     "test:adversarial": "node --test --experimental-strip-types tests/adversarial/*.test.ts",
     "test:e2e": "node --test --experimental-strip-types tests/e2e/*.test.ts",
+    "test:build": "npm run build && node --test --experimental-strip-types tests/unit/build.test.ts",
     "test:all": "node --test --experimental-strip-types tests/unit/*.test.ts tests/integration/*.test.ts tests/adversarial/*.test.ts tests/e2e/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
+  "license": "MIT",
   "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.13.9",
